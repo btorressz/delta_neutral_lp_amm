@@ -17,3 +17,18 @@ Delta Neutral LP AMM is a Solana Anchor program that implements a simple automat
 - GlobalConfig governs global limits, pausing, cooldowns, and deposit caps.
 
 ***  
+
+### Important Constants & Math Helpers 🧮
+- BPS_DENOM = 10_000 — basis points denominator used for fees and bands (100% = 10,000 bps).  
+- FP_SCALE = 1_000_000_000 (1e9) — fixed-point scaling factor used for price and base position representation.  
+- Helper functions included:
+  - now_slot(): returns the current Clock slot (or 0 on failure).
+  - checked_u128(u64) -> u128: safe cast helper.
+  - isqrt_u128(n: u128) -> u128: integer square root for u128 (used for initial LP mint logic).
+  - abs_i128(x: i128) -> i128: absolute value helper.
+  - to_fp_u64(x: u64) -> i128: convert u64 to fixed-point (i128) using FP_SCALE.
+  - fp_mul(a_fp, b_fp) / fp_div(a_fp, b_fp): fixed-point multiply and divide utilities that guard overflow and division by zero.
+
+These helpers ensure numeric stability and consistent fixed-point arithmetic across the program. ⚠️ Overflow checks are enforced and will return program-defined errors on arithmetic failures.
+
+***  
