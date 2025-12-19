@@ -87,3 +87,118 @@ The main instructions and what they do:
   Admin or guardian can toggle liquidation_mode on HedgeManager. When enabled, critical operations like rebalance and settle_funding are blocked. Emits LiquidationModeSet.
 
 ***  
+
+### Accounts & Data Models 📦
+
+Main on-chain account types and their roles:
+
+- GlobalConfig (PDA seeds: ["global"])  
+  - Stores admin, guardian, global limits, paused flag, bump.
+  - Fixed size (length constant defined).
+
+- Market (PDA seeds: ["market", base_mint, quote_mint])  
+  - References global PDA; stores base/quote mint pubkeys, vault pubkeys, lp_mint pubkey, fee bps, protocol fee bps, deposit caps, hedging settings (enabled, delta band), target delta, paused, bumps (market and vault_authority).
+  - Vault authority is a PDA derived from ["vault", market_pubkey].
+
+- Vault Authority (PDA seeds: ["vault", market_pubkey])  
+  - UncheckedAccount that acts as mint authority for LP mint and authority for vault token accounts.
+
+- Vault token accounts (base_vault and quote_vault)  
+  - Associated Token Accounts owned by the vault_authority and used to hold pool assets.
+
+- LP Mint  
+  - Mint authority is the vault_authority PDA and mints LP tokens when users deposit liquidity.
+
+- HedgeManager (PDA seeds: ["hedge", market_pubkey])  
+  - Contains hedge_position_base_fp (i128), entry_price_fp (i128), pending_funding_quote_fp (i128), realized_pnl_quote_fp (i128), last_rebalance_slot, hedge_paused, liquidation_mode, bump.
+  - Virtualizes the perp position (no direct SPL movement) and tracks PnL/funding numbers in fixed point.
+
+- OracleState (PDA seeds: ["oracle", market_pubkey])  
+  - Simple oracle stub: market pubkey, price_fp (i128), confidence_bps (u16), last_updated_slot, bump.
+
+***  
+
+### Events ✅
+The program emits events to make state changes observable:
+- GlobalInitialized
+- GlobalPaused
+- MarketInitialized
+- MarketPaused
+- OracleUpdated
+- LiquidityDeposited
+- LiquidityWithdrawn
+- SwapExecuted
+- HedgeRebalanced
+- FundingSettled
+- PnLSettled
+- LiquidationModeSet
+
+Events carry relevant fields like market pubkey, user/keeper who triggered the action, amounts, fixed-point prices, and slot timestamps.
+
+***  
+
+### Error Codes & Safety Checks 🚫
+Common failures return structured error codes:
+- Unauthorized — only admin/guardian or permitted signer attempted restricted action.
+- Paused — global or market paused.
+- BadAmount — invalid zero or negative-like amounts.
+- MathOverflow — arithmetic overflow or division by zero protected.
+- SlippageExceeded — min_out or min_lp_out not satisfied.
+- DepositCapExceeded — deposit caps enforced per market.
+- EmptyPool — swaps or actions invalid if vaults are empty.
+- BadOraclePrice / BadOracleConfidence / OracleStale — oracle validations.
+- BadFeeBps / BadDeltaBandBps — config validations.
+- HedgeDisabled / HedgePaused / LiquidationMode / HedgeCooldown / NoRebalanceNeeded / HedgeNotionalTooLarge — hedge-specific safety checks.
+
+All arithmetic uses checked operations and fixed-point math helpers to minimize numeric errors and revert on violations.
+
+***  
+
+### Security & Invariants 🔐
+- All token transfers and minting use CPI to the SPL Token program and require correct authorities (user signer or vault_authority PDA with signer seeds).
+- Vault authority and market/hedge PDAs prevent arbitrary control from external programs; seeds and bumps are used to sign vault-side transfers.
+- Oracle must be fresh; rebalance and funding functions validate oracle staleness against global.max_oracle_staleness_slots.
+- Rebalances are subject to cooldowns and delta bands to avoid excessive on-chain churn.
+- Deposit and swap logic check pool emptiness, supply, and arithmetic to prevent division by zero and rounding pitfalls.
+- Hedge notional is capped by global.max_hedge_notional_quote to limit systemic risk of large virtual positions.
+- Liquidation mode acts as an emergency kill switch controlled by admin/guardian.
+
+***  
+
+### Typical User Flows 🔄
+
+1. Admin: Initialize global config using initialize_global with governance parameters.  
+2. Admin: Initialize a market for (base_mint, quote_mint) using initialize_market. This sets up vaults, the LP mint, hedge manager, and oracle PDA.  
+3. Admin/Guardian: Set oracle prices via set_oracle_price (until an automated oracle is integrated).  
+4. Liquidity provider: deposit_liquidity(amount_base, amount_quote, min_lp_out) → receives LP tokens.  
+5. Trader: swap_exact_in(amount_in, min_out, base_to_quote) to trade between tokens. Fees collect in vaults.  
+6. Keeper: rebalance_hedge() periodically to align virtual short with pool base exposure.  
+7. Keeper: settle_funding(funding_rate_bps) to apply funding deltas to hedge accounting.  
+8. Keeper: settle_pnl_to_vaults() to move pending funding to realized PnL accounting (still internal accounting).  
+9. Liquidity provider: withdraw_liquidity(lp_amount, min_base_out, min_quote_out) to redeem their share of vaults.
+
+***  
+
+### Development & Testing Notes 🧩
+- The on-chain oracle is a stub. Integrate a reliable, signed oracle feed (Pyth or similar) prior to production use.  
+- Fixed-point scale is 1e9; be careful converting between human-readable decimals and on-chain fixed-point values.  
+- Many operations use checked arithmetic with i128/u128; unit tests should include edge cases for large values to ensure MathOverflow does not occur unexpectedly.  
+- Initial LP mint uses integer sqrt of (amount_base * amount_quote); ensure initial deposits are large enough to avoid root = 0 rejections.
+
+***  
+
+### Limitations & Next Steps 🔭
+- Oracle integration: replace admin-set oracle with a verified, trust-minimized external feed.  
+- Funding settlement currently records accounting internally — real token transfers to/from vaults for funding or realized PnL distribution are not implemented. Implement secure payout/collection flows if desired.  
+- No protocol fee withdrawal mechanism is provided — adding a protocol fee recipient and a withdrawal endpoint is recommended.  
+- More sophisticated hedging/perp integration (actual perp position) would require an external derivatives protocol adapter.
+
+***  
+
+### Contributing & Governance 🤝
+Contributions are welcome. When proposing changes, consider:
+- Tests for every new arithmetic or economic edge case.
+- Security review for changes touching PDA seeds, signer logic, and token authority flows.
+- Clear documentation for any economic parameter changes (fees, delta bands, caps).
+
+***  
